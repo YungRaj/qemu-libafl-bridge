@@ -65,6 +65,7 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
+#include "libafl/exit.h"
 #include "migration/blocker.h"
 #include "exec/memattrs.h"
 #include "trace.h"
@@ -6020,12 +6021,16 @@ static int kvm_handle_hc_map_gpa_range(struct kvm_run *run)
     return kvm_convert_memory(gpa, size, attributes & KVM_MAP_GPA_RANGE_ENCRYPTED);
 }
 
-static int kvm_handle_hypercall(struct kvm_run *run)
+static int kvm_handle_hypercall(struct kvm_run *run, X86CPU *cpu)
 {
+    CPUX86State *env = &cpu->env;
+    CPUState *cs = env_cpu(env);
+    /* Exits into LibAFL QEMU so that the NYX command handlers execute */
+    libafl_exit_request_custom_insn(cs, env->eip, LIBAFL_CUSTOM_INSN_NYX);
     if (run->hypercall.nr == KVM_HC_MAP_GPA_RANGE)
         return kvm_handle_hc_map_gpa_range(run);
 
-    return -EINVAL;
+    return 0;
 }
 
 #define VMX_INVALID_GUEST_STATE 0x80000021
@@ -6123,7 +6128,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
         break;
 #endif
     case KVM_EXIT_HYPERCALL:
-        ret = kvm_handle_hypercall(run);
+        ret = kvm_handle_hypercall(run, cpu);
         break;
     default:
         fprintf(stderr, "KVM: unknown exit reason %d\n", run->exit_reason);
